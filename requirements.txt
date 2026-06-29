@@ -1,0 +1,5 @@
+PyQt5
+PyMuPDF
+pdf2docx
+pypdf
+Pillow

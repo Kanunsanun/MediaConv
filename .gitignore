@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# PyInstaller / Inno Setup の出力
+build/
+dist/
+Output/
+*.spec.bak
+
+# 同梱バイナリ（CI が取得 or ローカルで配置するためコミットしない）
+bin/ffmpeg.exe
+bin/tesseract/
+
+# テスト生成物
+test.pdf
+test.txt
+test.docx
+compressed.pdf
+rotated.pdf
+*_compressed.pdf
+*_rotated.pdf
+out_imgs/
+out_zip/
+split_out/
+split_zip/
+from_imgs.pdf
+merged.pdf
+aud_out/
+a_src.*
