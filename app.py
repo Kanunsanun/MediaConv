@@ -5,6 +5,7 @@
 PDF 系はオフラインで動作。音声変換のみ ffmpeg を使用（配布版は同梱）。
 """
 import os
+import re
 import sys
 import traceback
 
@@ -380,6 +381,61 @@ class Page(QWidget):
         base = os.path.splitext(src)[0]
         return f"{base}{suffix}.{ext}"
 
+    # --- 出力先の検証（不正なパスを実行前に分かりやすく弾く）---
+    def out_file(self, text, ext):
+        """出力ファイルパスを検証して返す。フォルダが無効なら日本語の ValueError。"""
+        p = (text or "").strip().strip('"').strip("'")
+        if not p:
+            raise ValueError("出力ファイルを指定してください（「参照…」から保存先を選べます）。")
+        if not p.lower().endswith("." + ext.lower()):
+            p += "." + ext                       # 拡張子を補う
+        d = os.path.dirname(p)
+        if not d:
+            raise ValueError(
+                "保存先フォルダが指定されていません。\n"
+                "「参照…」から保存場所を選ぶか、フォルダを含む完全なパスを入力してください。\n"
+                f"（例: C:\\Users\\<ユーザー名>\\Desktop\\{os.path.basename(p)}）")
+        if not os.path.isdir(d):
+            raise ValueError(
+                f"保存先フォルダが見つかりません:\n{d}\n\n"
+                "「参照…」から実在するフォルダを選んでください。")
+        return p
+
+    def out_dir(self, text):
+        """出力フォルダを検証して返す。存在しなければ日本語の ValueError。"""
+        p = (text or "").strip().strip('"').strip("'")
+        if not p:
+            raise ValueError("出力フォルダを指定してください（「参照…」から選べます）。")
+        if not os.path.isdir(p):
+            raise ValueError(
+                f"出力フォルダが見つかりません:\n{p}\n\n"
+                "「参照…」から実在するフォルダを選んでください。")
+        return p
+
+    def valid_pages(self, text, label="ページ", required=False):
+        """ページ指定（例: 1-3,5,8-）を検証・正規化して返す。
+
+        全角の数字・記号は半角に直す。書式が不正なら日本語の ValueError。
+        required=True のとき空欄はエラー（範囲指定モードなど）。
+        """
+        # 全角 → 半角（数字・カンマ・各種ハイフン）
+        table = str.maketrans("０１２３４５６７８９，、－ー―‐", "0123456789,,----")
+        t = (text or "").translate(table).strip()
+        if not t:
+            if required:
+                raise ValueError(f"{label}を入力してください（例: 1-3,4-6）。")
+            return t  # 空欄=全ページ
+        for tok in t.split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            if not re.fullmatch(r"\d+|\d*-\d*", tok):
+                raise ValueError(
+                    f"{label}の指定「{tok}」が正しくありません。\n"
+                    "半角数字・カンマ・ハイフンで入力してください"
+                    "（例: 1-3,5,8-。空欄なら全ページ）。")
+        return t
+
 
 # ---- 各ページ実装 --------------------------------------------------------
 class PdfToImagesPage(Page):
@@ -415,10 +471,10 @@ class PdfToImagesPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.outdir.text(), "出力フォルダを選択してください。")
+        out = self.out_dir(self.outdir.text())
         return ops.pdf_to_images, dict(
             pdf_path=src, out_dir=out, dpi=self.dpi.value(),
-            fmt=self.fmt.currentText(), pages=self.pages.text(),
+            fmt=self.fmt.currentText(), pages=self.valid_pages(self.pages.text()),
             as_zip=self.zip.isChecked())
 
 
@@ -441,7 +497,7 @@ class ImagesToPdfPage(Page):
         paths = self.files.paths()
         if not paths:
             raise ValueError("画像を 1 つ以上追加してください。")
-        out = self.need(self.out.text(), "出力 PDF を指定してください。")
+        out = self.out_file(self.out.text(), "pdf")
         return ops.images_to_pdf, dict(image_paths=paths, out_pdf=out)
 
 
@@ -470,8 +526,9 @@ class PdfToTextPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.out.text(), "出力 TXT を指定してください。")
-        return ops.pdf_to_text, dict(pdf_path=src, out_txt=out, pages=self.pages.text())
+        out = self.out_file(self.out.text(), "txt")
+        return ops.pdf_to_text, dict(
+            pdf_path=src, out_txt=out, pages=self.valid_pages(self.pages.text()))
 
 
 class PdfToWordPage(Page):
@@ -497,7 +554,7 @@ class PdfToWordPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.out.text(), "出力 DOCX を指定してください。")
+        out = self.out_file(self.out.text(), "docx")
         return ops.pdf_to_word, dict(pdf_path=src, out_docx=out)
 
 
@@ -521,7 +578,7 @@ class MergePage(Page):
         paths = self.files.paths()
         if len(paths) < 2:
             raise ValueError("PDF を 2 つ以上追加してください。")
-        out = self.need(self.out.text(), "出力 PDF を指定してください。")
+        out = self.out_file(self.out.text(), "pdf")
         return ops.merge_pdfs, dict(
             pdf_paths=paths, out_pdf=out, rotations=self.files.rotations())
 
@@ -577,18 +634,18 @@ class SplitPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.outdir.text(), "出力フォルダを選択してください。")
+        out = self.out_dir(self.outdir.text())
+        ranges = ""
         if self.rb_each.isChecked():
             mode = "each"
         elif self.rb_every.isChecked():
             mode = "every"
         else:
             mode = "ranges"
-            if not self.ranges.text().strip():
-                raise ValueError("範囲を入力してください（例: 1-3,4-6）。")
+            ranges = self.valid_pages(self.ranges.text(), label="範囲", required=True)
         return ops.split_pdf, dict(
             pdf_path=src, out_dir=out, mode=mode,
-            every=self.every.value(), ranges=self.ranges.text(),
+            every=self.every.value(), ranges=ranges,
             as_zip=self.zip.isChecked())
 
 
@@ -619,9 +676,11 @@ class RotatePage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.out.text(), "出力 PDF を指定してください。")
+        out = self.out_file(self.out.text(), "pdf")
         angle = {0: 90, 1: 180, 2: 270}[self.angle.currentIndex()]
-        return ops.rotate_pdf, dict(pdf_path=src, out_pdf=out, angle=angle, pages=self.pages.text())
+        return ops.rotate_pdf, dict(
+            pdf_path=src, out_pdf=out, angle=angle,
+            pages=self.valid_pages(self.pages.text()))
 
 
 class CompressPage(Page):
@@ -651,7 +710,7 @@ class CompressPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.need(self.out.text(), "出力 PDF を指定してください。")
+        out = self.out_file(self.out.text(), "pdf")
         return ops.compress_pdf, dict(
             pdf_path=src, out_pdf=out,
             image_dpi=self.dpi.value(), jpeg_quality=self.quality.value())
@@ -703,7 +762,9 @@ class AudioPage(Page):
         paths = self.files.paths()
         if not paths:
             raise ValueError("音声ファイルを 1 つ以上追加してください。")
-        out = self.outdir.text() or os.path.dirname(paths[0])
+        # 未指定なら入力ファイルと同じフォルダに出力
+        outtext = (self.outdir.text() or "").strip()
+        out = self.out_dir(outtext) if outtext else os.path.dirname(paths[0])
         return ops.convert_audio, dict(
             input_paths=paths, out_dir=out, out_fmt=self.fmt.currentText())
 
@@ -821,7 +882,15 @@ class MainWindow(QMainWindow):
         self._active_btn.setEnabled(True)
         self.bar.setFormat("エラー")
         self.log_msg(f"✗ エラー: {err}")
-        QMessageBox.critical(self, "エラー", err)
+        # 低レベルなエラーには対処のヒントを添える
+        low = err.lower()
+        hint = ""
+        if ("permission denied" in low or "cannot open file" in low
+                or "no such file" in low or "写像" in low):
+            hint = ("\n\nヒント: 保存先のフォルダ名・ファイル名を確認してください。"
+                    "書き込みできるフォルダ（デスクトップ等）を「参照…」から選ぶと確実です。"
+                    "\n同名ファイルを他のアプリ（Word・Acrobat 等）で開いている場合は閉じてから再実行してください。")
+        QMessageBox.critical(self, "エラー", err + hint)
 
     def log_msg(self, text):
         self.log.append(text)
