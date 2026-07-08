@@ -205,15 +205,25 @@ def pdf_to_word(pdf_path, out_docx, progress=_noop):
 # ---------------------------------------------------------------------------
 # 結合
 # ---------------------------------------------------------------------------
-def merge_pdfs(pdf_paths, out_pdf, progress=_noop):
+def merge_pdfs(pdf_paths, out_pdf, rotations=None, progress=_noop):
+    """複数 PDF を 1 つに結合する。
+
+    rotations は各 PDF に適用する回転角(0/90/180/270)のリスト（pdf_paths と対応）。
+    指定があれば、その PDF の全ページを回転してから結合する。
+    """
     total = len(pdf_paths)
     doc = fitz.open()
     try:
         for i, p in enumerate(pdf_paths):
             src = fitz.open(p)
+            rot = 0 if not rotations else int(rotations[i]) % 360
+            if rot:
+                for page in src:
+                    page.set_rotation((page.rotation + rot) % 360)
             doc.insert_pdf(src)
             src.close()
-            progress(i + 1, total, f"{os.path.basename(p)} を結合")
+            tag = f"（{rot}°回転）" if rot else ""
+            progress(i + 1, total, f"{os.path.basename(p)} を結合{tag}")
         doc.save(out_pdf)
         return out_pdf
     finally:

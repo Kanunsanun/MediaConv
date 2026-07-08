@@ -129,8 +129,16 @@ class PathRow(QWidget):
         self.edit.setText(t)
 
 
+PATH_ROLE = Qt.UserRole
+ROT_ROLE = Qt.UserRole + 1
+
+
 class DropReorderList(QListWidget):
-    """内部ドラッグで並べ替え可、かつ外部ファイルのドロップ追加に対応するリスト。"""
+    """内部ドラッグで並べ替え可、かつ外部ファイルのドロップ追加に対応するリスト。
+
+    各アイテムはパス(PATH_ROLE)と回転角(ROT_ROLE)を保持し、表示はファイル名
+    ＋回転バッジ。回転は結合ページで各 PDF を回して結合するために使う。
+    """
     def __init__(self, exts):
         super().__init__()
         self.exts = tuple(e.lower() for e in exts)  # 受け付ける拡張子
@@ -139,6 +147,33 @@ class DropReorderList(QListWidget):
         self.setDefaultDropAction(Qt.MoveAction)
         self.setAcceptDrops(True)
 
+    # --- アイテム操作 ---
+    def add_path(self, path, rot=0):
+        it = QListWidgetItem()
+        it.setData(PATH_ROLE, path)
+        it.setData(ROT_ROLE, int(rot) % 360)
+        self._refresh(it)
+        self.addItem(it)
+
+    def _refresh(self, it):
+        path = it.data(PATH_ROLE) or ""
+        rot = it.data(ROT_ROLE) or 0
+        badge = f"    ↻ {rot}°" if rot else ""
+        it.setText(os.path.basename(path) + badge)
+        it.setToolTip(path)
+
+    def rotate_selected(self, delta=90):
+        for it in self.selectedItems():
+            it.setData(ROT_ROLE, ((it.data(ROT_ROLE) or 0) + delta) % 360)
+            self._refresh(it)
+
+    def paths(self):
+        return [self.item(i).data(PATH_ROLE) for i in range(self.count())]
+
+    def rotations(self):
+        return [self.item(i).data(ROT_ROLE) or 0 for i in range(self.count())]
+
+    # --- ドラッグ&ドロップ ---
     def _external_files(self, event):
         md = event.mimeData()
         if not md.hasUrls():
@@ -173,7 +208,7 @@ class DropReorderList(QListWidget):
         files = self._external_files(e)
         if files:
             for f in files:
-                self.addItem(f)
+                self.add_path(f)
             e.acceptProposedAction()
         else:
             e.ignore()
@@ -183,8 +218,9 @@ class FileListWidget(QWidget):
     """複数ファイルを並べ替え可能なリスト + 追加/削除/上下ボタン。
 
     リスト内でのドラッグ&ドロップ並べ替え、外部ファイルのドロップ追加に対応。
+    with_rotation=True で各アイテムを 90° ずつ回転するボタンを表示する。
     """
-    def __init__(self, file_filter, exts=()):
+    def __init__(self, file_filter, exts=(), with_rotation=False):
         super().__init__()
         self.file_filter = file_filter
         lay = QHBoxLayout(self)
@@ -193,9 +229,14 @@ class FileListWidget(QWidget):
         self.list.setMinimumHeight(150)
         lay.addWidget(self.list, 1)
 
+        buttons = [("追加…", self.add), ("削除", self.remove),
+                   ("▲", self.up), ("▼", self.down)]
+        if with_rotation:
+            buttons.append(("↻ 90°", lambda: self.list.rotate_selected(90)))
+        buttons.append(("クリア", self.clear))
+
         col = QVBoxLayout()
-        for label, slot in [("追加…", self.add), ("削除", self.remove),
-                            ("▲", self.up), ("▼", self.down), ("クリア", self.clear)]:
+        for label, slot in buttons:
             b = QPushButton(label)
             b.setObjectName("ghost")
             b.clicked.connect(slot)
@@ -206,7 +247,7 @@ class FileListWidget(QWidget):
     def add(self):
         files, _ = QFileDialog.getOpenFileNames(self, "ファイルを選択", "", self.file_filter)
         for f in files:
-            self.list.addItem(f)
+            self.list.add_path(f)
 
     def remove(self):
         for it in self.list.selectedItems():
@@ -232,7 +273,10 @@ class FileListWidget(QWidget):
         self.list.clear()
 
     def paths(self):
-        return [self.list.item(i).text() for i in range(self.list.count())]
+        return self.list.paths()
+
+    def rotations(self):
+        return self.list.rotations()
 
 
 # ===========================================================================
@@ -241,11 +285,24 @@ class FileListWidget(QWidget):
 class Page(QWidget):
     title = "ページ"
     desc = ""
+    MAX_W = 900          # 内容の最大幅（広い画面でも間延びしないよう中央寄せ）
 
     def __init__(self, main):
         super().__init__()
         self.main = main
-        self.outer = QVBoxLayout(self)
+        self._cur_form = None
+        self._has_expand = False
+
+        # 中央寄せの列（最大幅を制限）
+        shell = QHBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.addStretch(1)
+        col = QWidget()
+        col.setMaximumWidth(self.MAX_W)
+        shell.addWidget(col, 20)
+        shell.addStretch(1)
+
+        self.outer = QVBoxLayout(col)
         self.outer.setContentsMargins(28, 24, 28, 24)
         self.outer.setSpacing(14)
 
@@ -259,19 +316,42 @@ class Page(QWidget):
             self.outer.addWidget(d)
         self.outer.addWidget(hline())
 
-        self.form = QFormLayout()
-        self.form.setLabelAlignment(Qt.AlignRight)
-        self.form.setHorizontalSpacing(16)
-        self.form.setVerticalSpacing(12)
-        self.outer.addLayout(self.form)
         self.build()
-        self.outer.addStretch(1)
+
+        # 縦に伸びるウィジェット（リスト）が無いページだけ末尾に余白を入れる
+        if not self._has_expand:
+            self.outer.addStretch(1)
 
         self.run_btn = QPushButton("実行")
         self.run_btn.setObjectName("primary")
         self.run_btn.setMinimumHeight(40)
         self.run_btn.clicked.connect(self.on_run)
         self.outer.addWidget(self.run_btn)
+
+    @property
+    def form(self):
+        """呼ばれるたびに「現在のフォーム区画」を返す。add_expanding を挟むと
+        次の form 行から新しい区画になり、呼び出し順どおりに縦積みされる。"""
+        if self._cur_form is None:
+            f = QFormLayout()
+            f.setLabelAlignment(Qt.AlignRight)
+            f.setHorizontalSpacing(16)
+            f.setVerticalSpacing(12)
+            f.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            self.outer.addLayout(f)
+            self._cur_form = f
+        return self._cur_form
+
+    def add_expanding(self, label, widget, stretch=1):
+        """ラベル + 縦に伸びるウィジェット（リスト等）を追加。最大化時に空間を埋める。"""
+        self._cur_form = None
+        if label:
+            lab = QLabel(label)
+            lab.setObjectName("sectionLabel")
+            self.outer.addWidget(lab)
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.outer.addWidget(widget, stretch)
+        self._has_expand = True
 
     # サブクラスが実装
     def build(self):
@@ -349,7 +429,7 @@ class ImagesToPdfPage(Page):
     def build(self):
         self.files = FileListWidget(IMG_FILTER, IMG_EXTS)
         self.out = PathRow(self.pick_out, "出力 PDF")
-        self.form.addRow("画像ファイル", self.files)
+        self.add_expanding("画像ファイル", self.files)
         self.form.addRow("出力 PDF", self.out)
 
     def pick_out(self):
@@ -423,12 +503,13 @@ class PdfToWordPage(Page):
 
 class MergePage(Page):
     title = "結合"
-    desc = "複数の PDF を 1 つにまとめます。リストの行をドラッグして順番を入れ替えられます（上から順に結合）。"
+    desc = ("複数の PDF を 1 つにまとめます。行をドラッグで並べ替え（上から順に結合）。"
+            "各 PDF を選んで「↻ 90°」で回転してから結合できます。")
 
     def build(self):
-        self.files = FileListWidget(PDF_FILTER, PDF_EXTS)
+        self.files = FileListWidget(PDF_FILTER, PDF_EXTS, with_rotation=True)
         self.out = PathRow(self.pick_out, "出力 PDF")
-        self.form.addRow("PDF ファイル", self.files)
+        self.add_expanding("PDF ファイル", self.files)
         self.form.addRow("出力 PDF", self.out)
 
     def pick_out(self):
@@ -441,7 +522,8 @@ class MergePage(Page):
         if len(paths) < 2:
             raise ValueError("PDF を 2 つ以上追加してください。")
         out = self.need(self.out.text(), "出力 PDF を指定してください。")
-        return ops.merge_pdfs, dict(pdf_paths=paths, out_pdf=out)
+        return ops.merge_pdfs, dict(
+            pdf_paths=paths, out_pdf=out, rotations=self.files.rotations())
 
 
 class SplitPage(Page):
@@ -587,7 +669,7 @@ class AudioPage(Page):
         self.status = QLabel()
         self.status.setObjectName("statusNote")
         self.status.setWordWrap(True)
-        self.form.addRow("音声ファイル", self.files)
+        self.add_expanding("音声ファイル", self.files)
         self.form.addRow("出力フォルダ", self.outdir)
         self.form.addRow("出力形式", self.fmt)
         self.form.addRow("", self.status)
@@ -636,6 +718,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("MediaConv — PDF・音声 変換ツール")
         self.resize(940, 680)
+        self.setMinimumSize(720, 520)
         self.worker = None
         self.theme = self.DEFAULT_THEME
 
@@ -758,6 +841,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    # 高 DPI モニタで UI が極端に小さくならないようにする（QApplication 生成前に設定）
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
     app.setStyleSheet(build_qss(MainWindow.DEFAULT_THEME))
     w = MainWindow()

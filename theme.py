@@ -82,6 +82,7 @@ QListWidget#nav::item:hover:!selected {{ background: {t['nav_hover']}; }}
 /* ページ見出し */
 QLabel#pageTitle {{ font-size: 20px; font-weight: 600; color: {t['text']}; }}
 QLabel#pageDesc  {{ color: {t['text_dim']}; font-size: 12px; }}
+QLabel#sectionLabel {{ color: {t['text']}; font-weight: bold; }}
 QFrame#hline {{ background: {t['panel_border']}; max-height: 1px; border: none; }}
 
 /* パネル枠（GroupBox を機材パネル風に） */

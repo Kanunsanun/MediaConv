@@ -29,3 +29,7 @@ from_imgs.pdf
 merged.pdf
 aud_out/
 a_src.*
+
+# テスト用メディア（ローカルのみ・リポジトリには含めない。生成スクリプトだけ残す）
+testmedia/*
+!testmedia/make_testpdf.py
