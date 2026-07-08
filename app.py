@@ -382,9 +382,13 @@ class Page(QWidget):
         return f"{base}{suffix}.{ext}"
 
     # --- 出力先の検証（不正なパスを実行前に分かりやすく弾く）---
-    def out_file(self, text, ext):
-        """出力ファイルパスを検証して返す。フォルダが無効なら日本語の ValueError。"""
-        p = (text or "").strip().strip('"').strip("'")
+    def out_file(self, text, ext, default=""):
+        """出力ファイルパスを検証して返す。
+
+        空欄なら default（通常は入力と同じ場所の自動命名）を使う。
+        フォルダが無効なら日本語の ValueError。
+        """
+        p = (text or "").strip().strip('"').strip("'") or (default or "").strip()
         if not p:
             raise ValueError("出力ファイルを指定してください（「参照…」から保存先を選べます）。")
         if not p.lower().endswith("." + ext.lower()):
@@ -401,9 +405,9 @@ class Page(QWidget):
                 "「参照…」から実在するフォルダを選んでください。")
         return p
 
-    def out_dir(self, text):
-        """出力フォルダを検証して返す。存在しなければ日本語の ValueError。"""
-        p = (text or "").strip().strip('"').strip("'")
+    def out_dir(self, text, default=""):
+        """出力フォルダを検証して返す。空欄なら default を使う。"""
+        p = (text or "").strip().strip('"').strip("'") or (default or "").strip()
         if not p:
             raise ValueError("出力フォルダを指定してください（「参照…」から選べます）。")
         if not os.path.isdir(p):
@@ -444,7 +448,7 @@ class PdfToImagesPage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "変換する PDF")
-        self.outdir = PathRow(self.pick_out, "出力先フォルダ")
+        self.outdir = PathRow(self.pick_out, "出力先フォルダ（空欄で入力と同じ場所に保存）")
         self.fmt = QComboBox(); self.fmt.addItems(["png", "jpg"])
         self.dpi = QSpinBox(); self.dpi.setRange(36, 600); self.dpi.setValue(200)
         self.pages = QLineEdit(); self.pages.setPlaceholderText("例: 1-3,5  (空=全ページ)")
@@ -471,7 +475,7 @@ class PdfToImagesPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_dir(self.outdir.text())
+        out = self.out_dir(self.outdir.text(), default=os.path.dirname(src))
         return ops.pdf_to_images, dict(
             pdf_path=src, out_dir=out, dpi=self.dpi.value(),
             fmt=self.fmt.currentText(), pages=self.valid_pages(self.pages.text()),
@@ -484,7 +488,7 @@ class ImagesToPdfPage(Page):
 
     def build(self):
         self.files = FileListWidget(IMG_FILTER, IMG_EXTS)
-        self.out = PathRow(self.pick_out, "出力 PDF")
+        self.out = PathRow(self.pick_out, "出力 PDF（空欄で入力と同じ場所に自動保存）")
         self.add_expanding("画像ファイル", self.files)
         self.form.addRow("出力 PDF", self.out)
 
@@ -497,7 +501,8 @@ class ImagesToPdfPage(Page):
         paths = self.files.paths()
         if not paths:
             raise ValueError("画像を 1 つ以上追加してください。")
-        out = self.out_file(self.out.text(), "pdf")
+        out = self.out_file(self.out.text(), "pdf",
+                            default=os.path.join(os.path.dirname(paths[0]), "images.pdf"))
         return ops.images_to_pdf, dict(image_paths=paths, out_pdf=out)
 
 
@@ -507,7 +512,7 @@ class PdfToTextPage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "入力 PDF")
-        self.out = PathRow(self.pick_out, "出力 .txt")
+        self.out = PathRow(self.pick_out, "出力 .txt（空欄で自動）")
         self.pages = QLineEdit(); self.pages.setPlaceholderText("例: 1-3,5  (空=全ページ)")
         self.form.addRow("入力 PDF", self.src)
         self.form.addRow("出力 TXT", self.out)
@@ -526,7 +531,8 @@ class PdfToTextPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_file(self.out.text(), "txt")
+        out = self.out_file(self.out.text(), "txt",
+                            default=self.default_out(src, "", "txt"))
         return ops.pdf_to_text, dict(
             pdf_path=src, out_txt=out, pages=self.valid_pages(self.pages.text()))
 
@@ -537,7 +543,7 @@ class PdfToWordPage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "入力 PDF")
-        self.out = PathRow(self.pick_out, "出力 .docx")
+        self.out = PathRow(self.pick_out, "出力 .docx（空欄で自動）")
         self.form.addRow("入力 PDF", self.src)
         self.form.addRow("出力 DOCX", self.out)
 
@@ -554,7 +560,8 @@ class PdfToWordPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_file(self.out.text(), "docx")
+        out = self.out_file(self.out.text(), "docx",
+                            default=self.default_out(src, "", "docx"))
         return ops.pdf_to_word, dict(pdf_path=src, out_docx=out)
 
 
@@ -565,7 +572,7 @@ class MergePage(Page):
 
     def build(self):
         self.files = FileListWidget(PDF_FILTER, PDF_EXTS, with_rotation=True)
-        self.out = PathRow(self.pick_out, "出力 PDF")
+        self.out = PathRow(self.pick_out, "出力 PDF（空欄で入力と同じ場所に自動保存）")
         self.add_expanding("PDF ファイル", self.files)
         self.form.addRow("出力 PDF", self.out)
 
@@ -578,7 +585,8 @@ class MergePage(Page):
         paths = self.files.paths()
         if len(paths) < 2:
             raise ValueError("PDF を 2 つ以上追加してください。")
-        out = self.out_file(self.out.text(), "pdf")
+        out = self.out_file(self.out.text(), "pdf",
+                            default=os.path.join(os.path.dirname(paths[0]), "merged.pdf"))
         return ops.merge_pdfs, dict(
             pdf_paths=paths, out_pdf=out, rotations=self.files.rotations())
 
@@ -589,7 +597,7 @@ class SplitPage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "入力 PDF")
-        self.outdir = PathRow(self.pick_out, "出力先フォルダ")
+        self.outdir = PathRow(self.pick_out, "出力先フォルダ（空欄で入力と同じ場所に保存）")
 
         self.mode_group = QButtonGroup(self)
         self.rb_each = QRadioButton("1 ページずつ")
@@ -634,7 +642,7 @@ class SplitPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_dir(self.outdir.text())
+        out = self.out_dir(self.outdir.text(), default=os.path.dirname(src))
         ranges = ""
         if self.rb_each.isChecked():
             mode = "each"
@@ -655,7 +663,7 @@ class RotatePage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "入力 PDF")
-        self.out = PathRow(self.pick_out, "出力 PDF")
+        self.out = PathRow(self.pick_out, "出力 PDF（空欄で入力と同じ場所に自動保存）")
         self.angle = QComboBox(); self.angle.addItems(["90° 右", "180°", "90° 左 (270°)"])
         self.pages = QLineEdit(); self.pages.setPlaceholderText("例: 1-3,5  (空=全ページ)")
         self.form.addRow("入力 PDF", self.src)
@@ -676,7 +684,8 @@ class RotatePage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_file(self.out.text(), "pdf")
+        out = self.out_file(self.out.text(), "pdf",
+                            default=self.default_out(src, "_rotated", "pdf"))
         angle = {0: 90, 1: 180, 2: 270}[self.angle.currentIndex()]
         return ops.rotate_pdf, dict(
             pdf_path=src, out_pdf=out, angle=angle,
@@ -689,7 +698,7 @@ class CompressPage(Page):
 
     def build(self):
         self.src = PathRow(self.pick_src, "入力 PDF")
-        self.out = PathRow(self.pick_out, "出力 PDF")
+        self.out = PathRow(self.pick_out, "出力 PDF（空欄で入力と同じ場所に自動保存）")
         self.quality = QSpinBox(); self.quality.setRange(20, 95); self.quality.setValue(60)
         self.dpi = QSpinBox(); self.dpi.setRange(50, 600); self.dpi.setValue(120)
         self.form.addRow("入力 PDF", self.src)
@@ -710,7 +719,8 @@ class CompressPage(Page):
 
     def make_job(self):
         src = self.need(self.src.text(), "入力 PDF を選択してください。")
-        out = self.out_file(self.out.text(), "pdf")
+        out = self.out_file(self.out.text(), "pdf",
+                            default=self.default_out(src, "_compressed", "pdf"))
         return ops.compress_pdf, dict(
             pdf_path=src, out_pdf=out,
             image_dpi=self.dpi.value(), jpeg_quality=self.quality.value())
@@ -722,7 +732,7 @@ class AudioPage(Page):
 
     def build(self):
         self.files = FileListWidget(AUDIO_FILTER, AUDIO_EXTS)
-        self.outdir = PathRow(self.pick_out, "出力先フォルダ")
+        self.outdir = PathRow(self.pick_out, "出力先フォルダ（空欄で入力と同じ場所に保存）")
         self.fmt = QComboBox()
         self.fmt.addItems(["wav", "mp3", "flac", "aac"])
         self.status = QLabel()
@@ -763,8 +773,7 @@ class AudioPage(Page):
         if not paths:
             raise ValueError("音声ファイルを 1 つ以上追加してください。")
         # 未指定なら入力ファイルと同じフォルダに出力
-        outtext = (self.outdir.text() or "").strip()
-        out = self.out_dir(outtext) if outtext else os.path.dirname(paths[0])
+        out = self.out_dir(self.outdir.text(), default=os.path.dirname(paths[0]))
         return ops.convert_audio, dict(
             input_paths=paths, out_dir=out, out_fmt=self.fmt.currentText())
 

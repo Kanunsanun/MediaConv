@@ -9,7 +9,7 @@
 ;   Output\MediaConv_setup.exe
 
 #define MyAppName "MediaConv"
-#define MyAppVersion "1.2"
+#define MyAppVersion "1.3"
 #define MyAppPublisher "taise"
 #define MyAppExeName "MediaConv.exe"
 
